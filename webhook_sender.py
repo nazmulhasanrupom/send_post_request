@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+import json
 from datetime import datetime
 import pytz
 import re
@@ -20,8 +21,48 @@ def is_valid_email(email):
     """Simple regex check for email validation"""
     return re.match(r"[^@]+@[^@]+\.[^@]+", email)
 
+def fetch_clients_from_nocodb():
+    """Fetch active clients from NocoDB API"""
+    url = "https://app.nocodb.com/api/v2/tables/m3mcsvbsjgtv9sk/records"
+    headers = {
+        'accept': 'application/json',
+        'xc-token': '-uOAqbp1k8VgHGu1effwnfsyXS8Q6G_8_OSZ8YnG'
+    }
+    params = {
+        'fields': 'Client Name,Short Description',
+        'where': '@(c92xoh12wbaqmqk,eq,GO)',
+        'limit': '100'
+    }
+
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        data = response.json()
+
+        if 'list' in data and data['list']:
+            return data['list']
+        else:
+            return []
+    except requests.exceptions.RequestException as e:
+        st.error(f"Failed to fetch clients from NocoDB: {str(e)}")
+        return []
+    except json.JSONDecodeError as e:
+        st.error(f"Failed to parse response from NocoDB: {str(e)}")
+        return []
+
 # Hardcoded webhook URL
 WEBHOOK_URL = "https://lernoai.live/webhook/6dcf5935-5ace-4816-9d6a-7045bd8b64b6"
+
+# Initialize session state for clients
+if 'clients' not in st.session_state:
+    st.session_state.clients = []
+    st.session_state.clients_loaded = False
+
+# Load clients on app start
+if not st.session_state.clients_loaded:
+    with st.spinner("Loading active clients from NocoDB..."):
+        st.session_state.clients = fetch_clients_from_nocodb()
+        st.session_state.clients_loaded = True
 
 st.title("📝 Content Request Form")
 
@@ -60,12 +101,27 @@ with st.form("content_request_form"):
         help="Desired number of words for the content"
     )
 
-    # Client Name - Text input
-    client_name = st.text_input(
-        "Client Name",
-        placeholder="Enter the client's name",
-        help="The client requesting the content"
-    )
+    # Client Name - Dropdown from NocoDB
+    if st.session_state.clients:
+        client_options = {}
+        for client in st.session_state.clients:
+            client_name = client.get('Client Name', 'Unknown Client')
+            client_options[client_name] = client
+
+        selected_client_display = st.selectbox(
+            "Client Name",
+            options=list(client_options.keys()),
+            index=0 if client_options else None,
+            help="Select the client requesting the content"
+        )
+        client_name = selected_client_display
+    else:
+        st.error("No active clients found. Please check your NocoDB connection.")
+        client_name = st.text_input(
+            "Client Name (Fallback)",
+            placeholder="Enter the client's name manually",
+            help="The client requesting the content"
+        )
 
     # Additional Details
     additional_details = st.text_area(
@@ -92,7 +148,6 @@ if submitted:
         errors.append("Email address is required")
     elif not is_valid_email(email):
         errors.append("Please enter a valid email address")
-
 
     if errors:
         for error in errors:
@@ -145,3 +200,8 @@ if submitted:
 
             except Exception as e:
                 st.error(f"💥 Unexpected error: {str(e)}")
+
+# Reload clients button (outside the form)
+if st.button("🔄 Reload Clients"):
+    st.session_state.clients_loaded = False
+    st.rerun()
